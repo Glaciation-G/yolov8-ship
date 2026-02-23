@@ -73,6 +73,7 @@ from ultralytics.nn.modules import (
     YOLOESegment26,
     v10Detect,
 )
+from ultralytics.nn.extra_modules.context_spp import ContextSPP
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
