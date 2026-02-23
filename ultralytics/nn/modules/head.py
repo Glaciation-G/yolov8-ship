@@ -15,6 +15,8 @@ from ultralytics.utils import NOT_MACOS14
 from ultralytics.utils.tal import dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import TORCH_1_11, fuse_conv_and_bn, smart_inference_mode
 
+from ultralytics.nn.modules import ECA
+
 from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Proto26, RealNVP, Residual, SwiGLUFFN
 from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
@@ -84,7 +86,12 @@ class Detect(nn.Module):
             end2end (bool): Whether to use end-to-end NMS-free detection.
             ch (tuple): Tuple of channel sizes from backbone feature maps.
         """
+
         super().__init__()
+        # 后加的
+        self.eca = nn.ModuleList([ECA(c) for c in ch])
+
+        # 后加的
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = reg_max  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
@@ -144,9 +151,14 @@ class Detect(nn.Module):
         return dict(boxes=boxes, scores=scores, feats=x)
 
     def forward(
+        
         self, x: list[torch.Tensor]
     ) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+        # 后加的
+        for i in range(self.nl):
+            x[i] = self.eca[i](x[i])
+        # 后加的
         preds = self.forward_head(x, **self.one2many)
         if self.end2end:
             x_detach = [xi.detach() for xi in x]
