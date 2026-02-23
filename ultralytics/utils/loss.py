@@ -127,8 +127,37 @@ class BboxLoss(nn.Module):
         stride: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
-        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        #原始代码
+        
+        # weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+
+        # 后加的
+        # 原始分类权重
+        cls_weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+
+        # IoU
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+
+        # ⭐ 计算目标面积（xyxy 格式）
+        tb = target_bboxes[fg_mask]
+        w = (tb[:, 2] - tb[:, 0]).clamp(min=1e-6)
+        h = (tb[:, 3] - tb[:, 1]).clamp(min=1e-6)
+        area = w * h
+
+        # ⭐ 尺度感知权重（小目标权重大）
+        scale_weight = 1.0 / torch.sqrt(area + 1e-6)
+
+        # 归一化避免数值爆炸
+        scale_weight = scale_weight / scale_weight.mean()
+
+        scale_weight = scale_weight.unsqueeze(-1)
+
+        # 组合权重
+        weight = cls_weight * scale_weight
+
+        # 最终 IoU loss
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
