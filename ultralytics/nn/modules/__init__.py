@@ -76,6 +76,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
+from .eca import ECA
 from .head import (
     OBB,
     OBB26,
