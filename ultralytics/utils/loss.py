@@ -126,50 +126,49 @@ class BboxLoss(nn.Module):
         imgsz: torch.Tensor,
         stride: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute IoU and DFL losses for bounding boxes."""
-        #原始代码
-        
-        # weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
-        # 后加的
         # ===== IoU LOSS (尺度感知) =====
-
-        # 原始分类权重
         cls_weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
 
-        # IoU
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        iou = bbox_iou(
+            pred_bboxes[fg_mask],
+            target_bboxes[fg_mask],
+            xywh=False,
+            CIoU=True
+        )
 
-        # 计算目标面积（xyxy 格式）
         tb = target_bboxes[fg_mask]
         w = (tb[:, 2] - tb[:, 0]).clamp(min=1e-6)
         h = (tb[:, 3] - tb[:, 1]).clamp(min=1e-6)
         area = w * h
 
-        # 尺度感知权重（小目标权重大）
         scale_weight = 1.0 / torch.sqrt(area + 1e-6)
         scale_weight = scale_weight / scale_weight.mean()
         scale_weight = scale_weight.unsqueeze(-1)
 
-        # 只对 IoU 使用尺度权重
         weight_iou = cls_weight * scale_weight
 
         loss_iou = ((1.0 - iou) * weight_iou).sum() / target_scores_sum
 
 
-        # ===== DFL LOSS (保持原始权重) =====
-
+        # ===== DFL LOSS (原始逻辑) =====
         if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+            target_ltrb = bbox2dist(
+                anchor_points,
+                target_bboxes,
+                self.dfl_loss.reg_max - 1
+            )
+
             loss_dfl = self.dfl_loss(
                 pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max),
                 target_ltrb[fg_mask]
             ) * cls_weight
+
             loss_dfl = loss_dfl.sum() / target_scores_sum
+
         else:
             target_ltrb = bbox2dist(anchor_points, target_bboxes)
+
             target_ltrb = target_ltrb * stride
             target_ltrb[..., 0::2] /= imgsz[1]
             target_ltrb[..., 1::2] /= imgsz[0]
@@ -179,30 +178,17 @@ class BboxLoss(nn.Module):
             pred_dist[..., 1::2] /= imgsz[0]
 
             loss_dfl = (
-                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none")
-                .mean(-1, keepdim=True)
+                F.l1_loss(
+                    pred_dist[fg_mask],
+                    target_ltrb[fg_mask],
+                    reduction="none"
+                ).mean(-1, keepdim=True)
                 * cls_weight
             )
+
             loss_dfl = loss_dfl.sum() / target_scores_sum
 
-        # DFL loss
-        if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * cls_weight
-            loss_dfl = loss_dfl.sum() / target_scores_sum
-        else:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes)
-            # normalize ltrb by image size
-            target_ltrb = target_ltrb * stride
-            target_ltrb[..., 0::2] /= imgsz[1]
-            target_ltrb[..., 1::2] /= imgsz[0]
-            pred_dist = pred_dist * stride
-            pred_dist[..., 0::2] /= imgsz[1]
-            pred_dist[..., 1::2] /= imgsz[0]
-            loss_dfl = (
-                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True) * cls_weight
-            )
-            loss_dfl = loss_dfl.sum() / target_scores_sum
+        return loss_iou, loss_dfl
 
 
 
