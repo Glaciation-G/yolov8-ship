@@ -1,0 +1,30 @@
+# 数据集名称（自定义）
+name: levir_ship
+# 类别数量（根据你的数据集改，比如只有船舶就是1）
+nc: 1
+# 类别名称（按ID顺序排列，比如ID 0对应ship）
+names:
+  0: ship            # 类别名称
+
+
+# 数据集路径（Windows路径用/或\\，推荐用/）
+path: /root/dataset/YOLO  # 改为你的数据集根目录（绝对路径更稳妥）
+# 注意：如果只有train集，val和test也指向train（后续可拆分）
+train: /root/dataset/YOLO/train/images
+val: /root/dataset/YOLO/val/images
+test: /root/dataset/YOLO/test/images
+# 标签文件路径（可选，YOLO会自动找images同级的labels文件夹）
+# labels: E:/Graduate-Work/dataset/YOLO/train/labels
+
+
+
+
+
+# # 数据集路径（Windows路径用/或\\，推荐用/）
+# path: E:/Graduate-Work/YOLOv8-DPC-Inspired/dataset/YOLO  # 改为你的数据集根目录（绝对路径更稳妥）
+# # 注意：如果只有train集，val和test也指向train（后续可拆分）
+# train: E:/Graduate-Work/YOLOv8-DPC-Inspired/dataset/YOLO/train/images
+# val: E:/Graduate-Work/YOLOv8-DPC-Inspired/dataset/YOLO/test/images
+# test: E:/Graduate-Work/YOLOv8-DPC-Inspired/dataset/YOLO/val/images
+# # 标签文件路径（可选，YOLO会自动找images同级的labels文件夹）
+# # labels: E:/Graduate-Work/dataset/YOLO/train/labels
