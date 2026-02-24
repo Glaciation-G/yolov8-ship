@@ -15,10 +15,9 @@ from ultralytics.utils import NOT_MACOS14
 from ultralytics.utils.tal import dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import TORCH_1_11, fuse_conv_and_bn, smart_inference_mode
 
-from ultralytics.nn.modules import ECA
-
 from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Proto26, RealNVP, Residual, SwiGLUFFN
 from .conv import Conv, DWConv
+from .eca import ECA
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
@@ -88,10 +87,7 @@ class Detect(nn.Module):
         """
 
         super().__init__()
-        # 后加的
         self.eca = nn.ModuleList([ECA(c) for c in ch])
-
-        # 后加的
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = reg_max  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
@@ -150,15 +146,11 @@ class Detect(nn.Module):
         scores = torch.cat([cls_head[i](x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
         return dict(boxes=boxes, scores=scores, feats=x)
 
-    def forward(
-        
-        self, x: list[torch.Tensor]
-    ) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def forward(self, x: list[torch.Tensor]) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Concatenates and returns predicted bounding boxes and class probabilities."""
-        # 后加的
-        for i in range(self.nl):
-            x[i] = self.eca[i](x[i])
-        # 后加的
+        # Keep compatibility with old checkpoints serialized before ECA was added.
+        if hasattr(self, "eca"):
+            x = [self.eca[i](x[i]) for i in range(self.nl)] + x[self.nl :]
         preds = self.forward_head(x, **self.one2many)
         if self.end2end:
             x_detach = [xi.detach() for xi in x]

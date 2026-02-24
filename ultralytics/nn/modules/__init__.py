@@ -150,6 +150,7 @@ __all__ = (
     "ConvTranspose",
     "DWConv",
     "DWConvTranspose2d",
+    "ECA",
     "DeformableTransformerDecoder",
     "DeformableTransformerDecoderLayer",
     "Detect",
