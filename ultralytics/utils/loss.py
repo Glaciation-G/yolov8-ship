@@ -340,6 +340,10 @@ class v8DetectionLoss:
 
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.varifocal_loss = VarifocalLoss(
+            gamma=getattr(h, "vfl_gamma", 2.0),
+            alpha=getattr(h, "vfl_alpha", 0.75),
+        )
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -422,7 +426,8 @@ class v8DetectionLoss:
         target_scores_sum = max(target_scores.sum(), 1)
 
         # Cls loss
-        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        target_labels = target_scores.gt(0).to(dtype)
+        loss[1] = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels) / target_scores_sum
 
         # Bbox loss
         if fg_mask.sum():
@@ -1040,8 +1045,8 @@ class v8OBBLoss(v8DetectionLoss):
         target_scores_sum = max(target_scores.sum(), 1)
 
         # Cls loss
-        # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        target_labels = target_scores.gt(0).to(dtype)
+        loss[1] = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels) / target_scores_sum
 
         # Bbox loss
         if fg_mask.sum():
