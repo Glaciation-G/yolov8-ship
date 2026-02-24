@@ -45,6 +45,7 @@ __all__ = (
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "LCA",
     "Proto",
     "RepC3",
     "RepNCSPELAN4",
@@ -317,6 +318,39 @@ class C2f(nn.Module):
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
+class LCA(nn.Module):
+    """Lightweight Local Context Attention block for small-object feature enhancement."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 4):
+        """Initialize LCA with local pooling and channel reweighting.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): Local context pooling kernel size, usually 3/5/7.
+            reduction (int): Channel reduction ratio in the attention MLP.
+        """
+        super().__init__()
+        if k % 2 == 0:
+            raise ValueError("LCA kernel size 'k' must be odd.")
+        c_ = max(c2 // reduction, 8)
+        self.cv = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.pool = nn.AvgPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.attn = nn.Sequential(
+            nn.Conv2d(c2, c_, 1, bias=False),
+            nn.BatchNorm2d(c_),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(c_, c2, 1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply local-context attention with residual enhancement."""
+        y = self.cv(x)
+        w = self.attn(self.pool(y))
+        return y * w + y
 
 
 class C3(nn.Module):

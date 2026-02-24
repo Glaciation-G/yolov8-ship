@@ -54,6 +54,7 @@ from ultralytics.nn.modules import (
     HGStem,
     ImagePoolingAttn,
     Index,
+    LCA,
     LRPCHead,
     Pose,
     Pose26,
@@ -1586,6 +1587,7 @@ def parse_model(d, ch, verbose=True):
             PSA,
             SCDown,
             C2fCIB,
+            LCA,
             A2C2f,
         }
     )
