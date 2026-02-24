@@ -38,13 +38,21 @@ class VarifocalLoss(nn.Module):
         self.gamma = gamma
         self.alpha = alpha
 
-    def forward(self, pred_score: torch.Tensor, gt_score: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        pred_score: torch.Tensor,
+        gt_score: torch.Tensor,
+        label: torch.Tensor,
+        scale_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Compute varifocal loss between predictions and ground truth."""
         weight = self.alpha * pred_score.sigmoid().pow(self.gamma) * (1 - label) + gt_score * label
+        if scale_weight is not None:
+            weight = weight * scale_weight
         with autocast(enabled=False):
             loss = (
                 (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
-                .mean(1)
+                .sum(1)
                 .sum()
             )
         return loss
@@ -390,6 +398,18 @@ class v8DetectionLoss:
             # pred_dist = (pred_dist.view(b, a, c // 4, 4).softmax(2) * self.proj.type(pred_dist.dtype).view(1, 1, -1, 1)).sum(2)
         return dist2bbox(pred_dist, anchor_points, xywh=False)
 
+    @staticmethod
+    def _compute_scale_weight_xyxy(target_bboxes: torch.Tensor, fg_mask: torch.Tensor, imgsz: torch.Tensor) -> torch.Tensor:
+        """Compute scale-aware weight w=exp(-area_norm) for xyxy boxes."""
+        area_weight = torch.ones((*target_bboxes.shape[:2], 1), device=target_bboxes.device, dtype=target_bboxes.dtype)
+        if fg_mask.any():
+            wh = (target_bboxes[..., 2:4] - target_bboxes[..., 0:2]).clamp_min(0)
+            area = wh[..., 0] * wh[..., 1]
+            img_area = (imgsz[0] * imgsz[1]).clamp_min(1e-6)
+            area_norm = (area / img_area).clamp_min(0)
+            area_weight[fg_mask] = torch.exp(-area_norm[fg_mask]).unsqueeze(-1)
+        return area_weight
+
     def get_assigned_targets_and_loss(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> tuple:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size and return foreground mask and
         target indices.
@@ -427,7 +447,12 @@ class v8DetectionLoss:
 
         # Cls loss
         target_labels = target_scores.gt(0).to(dtype)
-        loss[1] = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels) / target_scores_sum
+        area_weight = self._compute_scale_weight_xyxy(target_bboxes, fg_mask, imgsz).to(dtype)
+        loss_bce = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
+        loss_vfl = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels, area_weight) / target_scores_sum
+        vfl_ratio = float(getattr(self.hyp, "vfl_ratio", 0.3))
+        vfl_ratio = min(max(vfl_ratio, 0.0), 1.0)
+        loss[1] = (1.0 - vfl_ratio) * loss_bce + vfl_ratio * loss_vfl
 
         # Bbox loss
         if fg_mask.sum():
@@ -995,6 +1020,18 @@ class v8OBBLoss(v8DetectionLoss):
                     out[j, :n] = torch.cat([targets[matches, 1:2], bboxes], dim=-1)
         return out
 
+    @staticmethod
+    def _compute_scale_weight_xywhr(target_bboxes: torch.Tensor, fg_mask: torch.Tensor, imgsz: torch.Tensor) -> torch.Tensor:
+        """Compute scale-aware weight w=exp(-area_norm) for xywhr boxes."""
+        area_weight = torch.ones((*target_bboxes.shape[:2], 1), device=target_bboxes.device, dtype=target_bboxes.dtype)
+        if fg_mask.any():
+            wh = target_bboxes[..., 2:4].clamp_min(0)
+            area = wh[..., 0] * wh[..., 1]
+            img_area = (imgsz[0] * imgsz[1]).clamp_min(1e-6)
+            area_norm = (area / img_area).clamp_min(0)
+            area_weight[fg_mask] = torch.exp(-area_norm[fg_mask]).unsqueeze(-1)
+        return area_weight
+
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the loss for oriented bounding box detection."""
         loss = torch.zeros(4, device=self.device)  # box, cls, dfl, angle
@@ -1046,7 +1083,12 @@ class v8OBBLoss(v8DetectionLoss):
 
         # Cls loss
         target_labels = target_scores.gt(0).to(dtype)
-        loss[1] = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels) / target_scores_sum
+        area_weight = self._compute_scale_weight_xywhr(target_bboxes, fg_mask, imgsz).to(dtype)
+        loss_bce = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
+        loss_vfl = self.varifocal_loss(pred_scores, target_scores.to(dtype), target_labels, area_weight) / target_scores_sum
+        vfl_ratio = float(getattr(self.hyp, "vfl_ratio", 0.3))
+        vfl_ratio = min(max(vfl_ratio, 0.0), 1.0)
+        loss[1] = (1.0 - vfl_ratio) * loss_bce + vfl_ratio * loss_vfl
 
         # Bbox loss
         if fg_mask.sum():
