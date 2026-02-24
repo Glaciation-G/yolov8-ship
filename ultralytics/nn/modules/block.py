@@ -45,6 +45,7 @@ __all__ = (
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "P2DenoiseBlock",
     "Proto",
     "RepC3",
     "RepNCSPELAN4",
@@ -180,6 +181,30 @@ class HGBlock(nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         y = self.ec(self.sc(torch.cat(y, 1)))
         return y + x if self.add else y
+
+
+class P2DenoiseBlock(nn.Module):
+    """Lightweight denoise block for P2 feature fusion.
+
+    The block keeps spatial resolution and channels unchanged:
+    1) 3x3 standard Conv-BN-SiLU
+    2) 3x3 depthwise Conv-BN-SiLU (groups=c)
+    3) Residual add with input
+    """
+
+    def __init__(self, c: int):
+        """Initialize P2 denoise block with fixed input/output channels."""
+        super().__init__()
+        self.cv1 = Conv(c, c, k=3, s=1)
+        self.dw = nn.Conv2d(c, c, kernel_size=3, stride=1, padding=1, groups=c, bias=False)
+        self.bn = nn.BatchNorm2d(c)
+        self.act = Conv.default_act
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply denoise convolutions and residual shortcut."""
+        y = self.cv1(x)
+        y = self.act(self.bn(self.dw(y)))
+        return x + y
 
 
 class SPP(nn.Module):

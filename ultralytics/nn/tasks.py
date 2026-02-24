@@ -21,6 +21,7 @@ from ultralytics.nn.modules import (
     ELAN1,
     OBB,
     OBB26,
+    P2DenoiseBlock,
     PSA,
     SPP,
     SPPELAN,
