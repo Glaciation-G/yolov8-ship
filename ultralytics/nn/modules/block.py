@@ -26,6 +26,7 @@ __all__ = (
     "SPPELAN",
     "SPPF",
     "Context_spp",
+    "ECA",
     "AConv",
     "ADown",
     "Attention",
@@ -270,6 +271,31 @@ class Context_spp(nn.Module):
         y.append(context)
         y = self.cv2(torch.cat(y, 1))
         return y + x_in if self.add else y
+
+
+class ECA(nn.Module):
+    """Efficient Channel Attention block."""
+
+    def __init__(self, c1: int, c2: int, k_size: int = 3):
+        """Initialize ECA block.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k_size (int): 1D kernel size for local cross-channel interaction.
+        """
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
+        self.act = nn.Sigmoid()
+        self.cv = Conv(c1, c2, 1, 1, act=False) if c1 != c2 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply channel attention and optional channel projection."""
+        y = self.avg_pool(x)
+        y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
+        y = self.act(y)
+        return self.cv(x * y)
 
 
 class C1(nn.Module):
