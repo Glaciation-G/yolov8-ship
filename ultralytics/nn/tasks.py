@@ -39,6 +39,7 @@ from ultralytics.nn.modules import (
     C3x,
     CBFuse,
     CBLinear,
+    BiFPNAdd,
     Classify,
     Concat,
     Conv,
@@ -1657,6 +1658,11 @@ def parse_model(d, ch, verbose=True):
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        elif m is BiFPNAdd:
+            c2 = ch[f[0]]
+            if any(ch[x] != c2 for x in f):
+                raise ValueError(f"BiFPNAdd requires equal channels, but got {[ch[x] for x in f]}")
+            args = [len(f), *args]
         elif m in frozenset(
             {
                 Detect,

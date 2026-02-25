@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 __all__ = (
+    "BiFPNAdd",
     "CBAM",
     "ChannelAttention",
     "Concat",
@@ -639,6 +640,32 @@ class Concat(nn.Module):
             (torch.Tensor): Concatenated tensor.
         """
         return torch.cat(x, self.d)
+
+
+class BiFPNAdd(nn.Module):
+    """BiFPN-style weighted feature fusion using normalized learned scalars."""
+
+    def __init__(self, n=2, eps=1e-4):
+        """Initialize weighted sum fusion.
+
+        Args:
+            n (int): Number of input feature maps.
+            eps (float): Small value to avoid divide-by-zero.
+        """
+        super().__init__()
+        self.eps = eps
+        self.w = nn.Parameter(torch.ones(n, dtype=torch.float32), requires_grad=True)
+
+    def forward(self, x: list[torch.Tensor]):
+        """Fuse features with normalized non-negative learnable weights."""
+        assert isinstance(x, list), "BiFPNAdd expects a list of tensors."
+        assert len(x) == self.w.shape[0], f"Expected {self.w.shape[0]} inputs, got {len(x)}."
+        shape = x[0].shape
+        if not all(t.shape == shape for t in x):
+            raise ValueError(f"BiFPNAdd requires same tensor shape for all inputs, but got {[t.shape for t in x]}")
+        w = torch.relu(self.w)
+        w = w / (w.sum() + self.eps)
+        return sum(w[i] * x[i] for i in range(len(x)))
 
 
 class Index(nn.Module):
