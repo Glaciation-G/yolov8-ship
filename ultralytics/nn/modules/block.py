@@ -15,7 +15,6 @@ from .transformer import TransformerBlock
 __all__ = (
     "C1",
     "C2",
-    "ContextSPP",
     "C2PSA",
     "C3",
     "C3TR",
@@ -26,6 +25,7 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
+    "Context_spp",
     "AConv",
     "ADown",
     "Attention",
@@ -238,28 +238,38 @@ class SPPF(nn.Module):
         return y + x if getattr(self, "add", False) else y
 
 
-class ContextSPP(nn.Module):
-    """Context-enhanced SPP block with local and global context fusion."""
+class Context_spp(nn.Module):
+    """SPPF with an extra global context branch."""
 
     def __init__(self, c1: int, c2: int, k: int = 5, n: int = 3, shortcut: bool = False):
-        """Initialize ContextSPP with local pyramid pooling and global context branch."""
+        """Initialize Context_spp.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): MaxPool kernel size.
+            n (int): Number of sequential pooling operations.
+            shortcut (bool): Whether to add residual when channel sizes match.
+        """
         super().__init__()
         c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1, act=False)
+        self.cv2 = Conv(c_ * (n + 2), c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
         self.n = n
-        self.context = Conv(c_, c_, 1, 1, act=False)
-        self.cv2 = Conv(c_ * (n + 2), c2, 1, 1)
         self.add = shortcut and c1 == c2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Fuse local pyramid features with global context, then project."""
-        y = [self.cv1(x)]
+        """Apply local pyramid pooling + global context aggregation."""
+        x_in = x
+        x = self.cv1(x)
+        y = [x]
         y.extend(self.m(y[-1]) for _ in range(self.n))
-        gc = self.context(F.adaptive_avg_pool2d(y[0], 1))
-        gc = gc.expand(-1, -1, y[0].shape[2], y[0].shape[3])
-        y = self.cv2(torch.cat([*y, gc], 1))
-        return y + x if self.add else y
+        context = F.adaptive_avg_pool2d(x, output_size=1)
+        context = F.interpolate(context, size=x.shape[-2:], mode="nearest")
+        y.append(context)
+        y = self.cv2(torch.cat(y, 1))
+        return y + x_in if self.add else y
 
 
 class C1(nn.Module):
