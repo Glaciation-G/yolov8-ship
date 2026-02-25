@@ -15,6 +15,7 @@ from .transformer import TransformerBlock
 __all__ = (
     "C1",
     "C2",
+    "ContextSPP",
     "C2PSA",
     "C3",
     "C3TR",
@@ -235,6 +236,30 @@ class SPPF(nn.Module):
         y.extend(self.m(y[-1]) for _ in range(getattr(self, "n", 3)))
         y = self.cv2(torch.cat(y, 1))
         return y + x if getattr(self, "add", False) else y
+
+
+class ContextSPP(nn.Module):
+    """Context-enhanced SPP block with local and global context fusion."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, n: int = 3, shortcut: bool = False):
+        """Initialize ContextSPP with local pyramid pooling and global context branch."""
+        super().__init__()
+        c_ = c1 // 2  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1, act=False)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.n = n
+        self.context = Conv(c_, c_, 1, 1, act=False)
+        self.cv2 = Conv(c_ * (n + 2), c2, 1, 1)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Fuse local pyramid features with global context, then project."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(self.n))
+        gc = self.context(F.adaptive_avg_pool2d(y[0], 1))
+        gc = gc.expand(-1, -1, y[0].shape[2], y[0].shape[3])
+        y = self.cv2(torch.cat([*y, gc], 1))
+        return y + x if self.add else y
 
 
 class C1(nn.Module):
