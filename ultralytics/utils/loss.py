@@ -109,10 +109,14 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(self, reg_max: int = 16):
-        """Initialize the BboxLoss module with regularization maximum and DFL settings."""
+    def __init__(self, reg_max: int = 16, hyp: Any = None):
+        """Initialize the BboxLoss module with IoU/DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.use_uar = getattr(hyp, "uar", True)
+        self.uar_alpha = float(getattr(hyp, "uar_alpha", 0.5))
+        self.uar_beta = float(getattr(hyp, "uar_beta", 0.05))
+        self.uar_eps = float(getattr(hyp, "uar_eps", 1e-6))
 
     def forward(
         self,
@@ -128,8 +132,24 @@ class BboxLoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        ciou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        if ciou.ndim == 1:
+            ciou = ciou.unsqueeze(-1)
+        ciou = torch.nan_to_num(ciou, nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
+        base_loss = (1.0 - ciou).clamp_min_(0.0)
+
+        if self.use_uar:
+            # UAR-Loss: heteroscedastic-style weighting using detached IoU as uncertainty proxy.
+            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False).detach()
+            if iou.ndim == 1:
+                iou = iou.unsqueeze(-1)
+            iou = torch.nan_to_num(iou, nan=self.uar_eps, posinf=1.0, neginf=self.uar_eps)
+            iou = iou.clamp_(min=self.uar_eps, max=1.0)
+            uncertainty = -torch.log(iou)
+            confidence = torch.exp(-self.uar_alpha * uncertainty)
+            loss_iou = ((confidence * base_loss + self.uar_beta * uncertainty) * weight).sum() / target_scores_sum
+        else:
+            loss_iou = (base_loss * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
@@ -357,7 +377,7 @@ class v8DetectionLoss:
             stride=self.stride.tolist(),
             topk2=tal_topk2,
         )
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        self.bbox_loss = BboxLoss(m.reg_max, h).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:

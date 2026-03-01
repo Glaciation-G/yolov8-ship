@@ -102,6 +102,10 @@ warmup_bias_lr: 0.1 # (float) bias learning rate during warmup
 box: 7.5 # (float) box loss gain
 cls: 0.5 # (float) classification loss gain
 dfl: 1.5 # (float) distribution focal loss gain
+uar: True # (bool) enable Uncertainty-Aware Regression loss for bbox training
+uar_alpha: 0.5 # (float) uncertainty-to-confidence scaling factor in UAR-Loss
+uar_beta: 0.05 # (float) uncertainty regularization weight in UAR-Loss
+uar_eps: 1e-6 # (float) numerical epsilon for UAR-Loss stability
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)
