@@ -37,6 +37,12 @@ class TaskAlignedAssigner(nn.Module):
         stride: list = [8, 16, 32],
         eps: float = 1e-9,
         topk2=None,
+        scale_aware: bool = False,
+        sa_topk_min: int = 1,
+        sa_topk_max: int | None = None,
+        sa_scale_ref: float = 32.0,
+        sa_gamma: float = 0.5,
+        sa_beta_gamma: float = 0.2,
     ):
         """Initialize a TaskAlignedAssigner object with customizable hyperparameters.
 
@@ -58,6 +64,12 @@ class TaskAlignedAssigner(nn.Module):
         self.stride = stride
         self.stride_val = self.stride[1] if len(self.stride) > 1 else self.stride[0]
         self.eps = eps
+        self.scale_aware = scale_aware
+        self.sa_topk_min = max(1, int(sa_topk_min))
+        self.sa_topk_max = max(self.sa_topk_min, int(sa_topk_max)) if sa_topk_max is not None else self.topk
+        self.sa_scale_ref = max(float(sa_scale_ref), eps)
+        self.sa_gamma = float(sa_gamma)
+        self.sa_beta_gamma = float(sa_beta_gamma)
 
     @torch.no_grad()
     def forward(self, pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt):
@@ -160,16 +172,53 @@ class TaskAlignedAssigner(nn.Module):
             overlaps (torch.Tensor): Overlaps between predicted vs ground truth boxes with shape (bs, max_num_obj, h*w).
         """
         mask_in_gts = self.select_candidates_in_gts(anc_points, gt_bboxes, mask_gt)
+        topk_per_gt, beta_per_gt = self.get_scale_aware_params(gt_bboxes, mask_gt)
         # Get anchor_align metric, (b, max_num_obj, h*w)
-        align_metric, overlaps = self.get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt)
+        align_metric, overlaps = self.get_box_metrics(
+            pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt, beta_per_gt
+        )
         # Get topk_metric mask, (b, max_num_obj, h*w)
-        mask_topk = self.select_topk_candidates(align_metric, topk_mask=mask_gt.expand(-1, -1, self.topk).bool())
+        mask_topk = self.select_topk_candidates(
+            align_metric,
+            topk_mask=mask_gt.expand(-1, -1, min(int(topk_per_gt.max().item()), align_metric.shape[-1])).bool(),
+            topk_per_gt=topk_per_gt,
+        )
         # Merge all mask to a final mask, (b, max_num_obj, h*w)
         mask_pos = mask_topk * mask_in_gts * mask_gt
 
         return mask_pos, align_metric, overlaps
 
-    def get_box_metrics(self, pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_gt):
+    def get_scale_aware_params(self, gt_bboxes, mask_gt):
+        """Generate per-GT dynamic top-k and IoU beta based on object scale."""
+        topk_per_gt = torch.full(
+            (self.bs, self.n_max_boxes, 1),
+            self.topk,
+            dtype=torch.long,
+            device=gt_bboxes.device,
+        )
+        beta_per_gt = torch.full(
+            (self.bs, self.n_max_boxes, 1),
+            self.beta,
+            dtype=gt_bboxes.dtype,
+            device=gt_bboxes.device,
+        )
+        if not self.scale_aware:
+            return topk_per_gt, beta_per_gt
+
+        gt_wh = (gt_bboxes[..., 2:] - gt_bboxes[..., :2]).clamp_min(0.0)
+        scale = torch.sqrt((gt_wh[..., 0:1] * gt_wh[..., 1:2]).clamp_min(self.eps))
+        norm_scale = (scale / self.sa_scale_ref).clamp_(0.25, 4.0)
+
+        dynamic_ratio = norm_scale.pow(-self.sa_gamma)
+        dynamic_topk = (self.topk * dynamic_ratio).round().clamp_(self.sa_topk_min, self.sa_topk_max).long()
+
+        dynamic_beta = (self.beta * norm_scale.pow(self.sa_beta_gamma)).clamp_(1.0, max(self.beta * 2.0, 1.0))
+        valid_mask = mask_gt.bool()
+        topk_per_gt = torch.where(valid_mask, dynamic_topk, topk_per_gt)
+        beta_per_gt = torch.where(valid_mask, dynamic_beta, beta_per_gt)
+        return topk_per_gt, beta_per_gt
+
+    def get_box_metrics(self, pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_gt, beta_per_gt=None):
         """Compute alignment metric given predicted and ground truth bounding boxes.
 
         Args:
@@ -199,7 +248,8 @@ class TaskAlignedAssigner(nn.Module):
         gt_boxes = gt_bboxes.unsqueeze(2).expand(-1, -1, na, -1)[mask_gt]
         overlaps[mask_gt] = self.iou_calculation(gt_boxes, pd_boxes)
 
-        align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
+        beta_tensor = beta_per_gt if beta_per_gt is not None else self.beta
+        align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(beta_tensor)
         return align_metric, overlaps
 
     def iou_calculation(self, gt_bboxes, pd_bboxes):
@@ -214,7 +264,7 @@ class TaskAlignedAssigner(nn.Module):
         """
         return bbox_iou(gt_bboxes, pd_bboxes, xywh=False, CIoU=True).squeeze(-1).clamp_(0)
 
-    def select_topk_candidates(self, metrics, topk_mask=None):
+    def select_topk_candidates(self, metrics, topk_mask=None, topk_per_gt=None):
         """Select the top-k candidates based on the given metrics.
 
         Args:
@@ -227,17 +277,25 @@ class TaskAlignedAssigner(nn.Module):
         Returns:
             (torch.Tensor): A tensor of shape (b, max_num_obj, h*w) containing the selected top-k candidates.
         """
+        dynamic_topk = self.topk
+        if topk_per_gt is not None:
+            dynamic_topk = int(topk_per_gt.max().item())
+        dynamic_topk = max(1, min(dynamic_topk, metrics.shape[-1]))
         # (b, max_num_obj, topk)
-        topk_metrics, topk_idxs = torch.topk(metrics, self.topk, dim=-1, largest=True)
+        topk_metrics, topk_idxs = torch.topk(metrics, dynamic_topk, dim=-1, largest=True)
         if topk_mask is None:
             topk_mask = (topk_metrics.max(-1, keepdim=True)[0] > self.eps).expand_as(topk_idxs)
+        if topk_per_gt is not None:
+            rank_idx = torch.arange(dynamic_topk, device=metrics.device).view(1, 1, -1)
+            dynamic_mask = rank_idx < topk_per_gt.clamp(1, dynamic_topk)
+            topk_mask = topk_mask & dynamic_mask
         # (b, max_num_obj, topk)
         topk_idxs.masked_fill_(~topk_mask, 0)
 
         # (b, max_num_obj, topk, h*w) -> (b, max_num_obj, h*w)
         count_tensor = torch.zeros(metrics.shape, dtype=torch.int8, device=topk_idxs.device)
         ones = torch.ones_like(topk_idxs[:, :, :1], dtype=torch.int8, device=topk_idxs.device)
-        for k in range(self.topk):
+        for k in range(dynamic_topk):
             # Expand topk_idxs for each value of k and add 1 at the specified positions
             count_tensor.scatter_add_(-1, topk_idxs[:, :, k : k + 1], ones)
         # Filter invalid bboxes

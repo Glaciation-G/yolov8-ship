@@ -356,6 +356,12 @@ class v8DetectionLoss:
             beta=6.0,
             stride=self.stride.tolist(),
             topk2=tal_topk2,
+            scale_aware=getattr(h, "sa_dynamic", False),
+            sa_topk_min=getattr(h, "sa_topk_min", 1),
+            sa_topk_max=getattr(h, "sa_topk_max", tal_topk),
+            sa_scale_ref=getattr(h, "sa_scale_ref", 32.0),
+            sa_gamma=getattr(h, "sa_gamma", 0.5),
+            sa_beta_gamma=getattr(h, "sa_beta_gamma", 0.2),
         )
         self.bbox_loss = BboxLoss(m.reg_max).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
@@ -970,6 +976,12 @@ class v8OBBLoss(v8DetectionLoss):
             beta=6.0,
             stride=self.stride.tolist(),
             topk2=tal_topk2,
+            scale_aware=getattr(self.hyp, "sa_dynamic", False),
+            sa_topk_min=getattr(self.hyp, "sa_topk_min", 1),
+            sa_topk_max=getattr(self.hyp, "sa_topk_max", tal_topk),
+            sa_scale_ref=getattr(self.hyp, "sa_scale_ref", 32.0),
+            sa_gamma=getattr(self.hyp, "sa_gamma", 0.5),
+            sa_beta_gamma=getattr(self.hyp, "sa_beta_gamma", 0.2),
         )
         self.bbox_loss = RotatedBboxLoss(self.reg_max).to(self.device)
 

@@ -102,6 +102,12 @@ warmup_bias_lr: 0.1 # (float) bias learning rate during warmup
 box: 7.5 # (float) box loss gain
 cls: 0.5 # (float) classification loss gain
 dfl: 1.5 # (float) distribution focal loss gain
+sa_dynamic: True # (bool) enable Scale-Aware Dynamic Assignment in TAL
+sa_topk_min: 1 # (int) minimum dynamic top-k per GT for assigner
+sa_topk_max: 16 # (int) maximum dynamic top-k per GT for assigner
+sa_scale_ref: 32.0 # (float) reference object scale (pixels) for dynamic assignment
+sa_gamma: 0.5 # (float) dynamic top-k exponent, larger -> more aggressive for small objects
+sa_beta_gamma: 0.2 # (float) scale-aware modulation strength for IoU exponent beta
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)
