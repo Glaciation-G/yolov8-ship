@@ -113,10 +113,33 @@ class BboxLoss(nn.Module):
         """Initialize the BboxLoss module with IoU/DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
-        self.use_uar = getattr(hyp, "uar", True)
+        self.use_uar = bool(getattr(hyp, "uar", True))
         self.uar_alpha = float(getattr(hyp, "uar_alpha", 0.5))
         self.uar_beta = float(getattr(hyp, "uar_beta", 0.05))
         self.uar_eps = float(getattr(hyp, "uar_eps", 1e-6))
+
+    def uar_loss(
+        self,
+        ciou: torch.Tensor,
+        pred_bboxes: torch.Tensor,
+        target_bboxes: torch.Tensor,
+        weight: torch.Tensor,
+        target_scores_sum: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute uncertainty-aware regression (UAR) loss for bounding boxes."""
+        if ciou.ndim == 1:
+            ciou = ciou.unsqueeze(-1)
+        ciou = torch.nan_to_num(ciou, nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
+        base_loss = (1.0 - ciou).clamp_min_(0.0)
+
+        iou = bbox_iou(pred_bboxes, target_bboxes, xywh=False).detach()
+        if iou.ndim == 1:
+            iou = iou.unsqueeze(-1)
+        iou = torch.nan_to_num(iou, nan=self.uar_eps, posinf=1.0, neginf=self.uar_eps).clamp_(self.uar_eps, 1.0)
+
+        uncertainty = -torch.log(iou)
+        confidence = torch.exp(-self.uar_alpha * uncertainty)
+        return ((confidence * base_loss + self.uar_beta * uncertainty) * weight).sum() / target_scores_sum
 
     def forward(
         self,
@@ -133,22 +156,20 @@ class BboxLoss(nn.Module):
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
         ciou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        if ciou.ndim == 1:
-            ciou = ciou.unsqueeze(-1)
-        ciou = torch.nan_to_num(ciou, nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
-        base_loss = (1.0 - ciou).clamp_min_(0.0)
 
         if self.use_uar:
-            # UAR-Loss: heteroscedastic-style weighting using detached IoU as uncertainty proxy.
-            iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False).detach()
-            if iou.ndim == 1:
-                iou = iou.unsqueeze(-1)
-            iou = torch.nan_to_num(iou, nan=self.uar_eps, posinf=1.0, neginf=self.uar_eps)
-            iou = iou.clamp_(min=self.uar_eps, max=1.0)
-            uncertainty = -torch.log(iou)
-            confidence = torch.exp(-self.uar_alpha * uncertainty)
-            loss_iou = ((confidence * base_loss + self.uar_beta * uncertainty) * weight).sum() / target_scores_sum
+            loss_iou = self.uar_loss(
+                ciou=ciou,
+                pred_bboxes=pred_bboxes[fg_mask],
+                target_bboxes=target_bboxes[fg_mask],
+                weight=weight,
+                target_scores_sum=target_scores_sum,
+            )
         else:
+            if ciou.ndim == 1:
+                ciou = ciou.unsqueeze(-1)
+            ciou = torch.nan_to_num(ciou, nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
+            base_loss = (1.0 - ciou).clamp_min_(0.0)
             loss_iou = (base_loss * weight).sum() / target_scores_sum
 
         # DFL loss
