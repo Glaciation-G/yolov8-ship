@@ -13,7 +13,7 @@ epochs: 100 # (int) number of epochs to train for
 time: # (float, optional) max hours to train; overrides epochs if set
 patience: 100 # (int) early stop after N epochs without val improvement
 batch: 16 # (int) batch size; use -1 for AutoBatch
-imgsz: 640 # (int | list) train/val use int (square); predict/export may use [h,w]
+imgsz: 512 # (int | list) train/val use int (square); predict/export may use [h,w]
 save: True # (bool) save train checkpoints and predict results
 save_period: -1 # (int) save checkpoint every N epochs; disabled if < 1
 cache: False # (bool | str) cache images in RAM (True/'ram') or on 'disk' to speed dataloading; False disables
@@ -102,6 +102,10 @@ warmup_bias_lr: 0.1 # (float) bias learning rate during warmup
 box: 7.5 # (float) box loss gain
 cls: 0.5 # (float) classification loss gain
 dfl: 1.5 # (float) distribution focal loss gain
+uar: True # (bool) enable UAR box regression loss (detect/segment/pose/obb)
+uar_alpha: 1.0 # (float) UAR uncertainty term weight
+uar_beta: 1.5 # (float) UAR uncertainty term exponent
+uar_eps: 1.0e-7 # (float) UAR numerical stability epsilon
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)
